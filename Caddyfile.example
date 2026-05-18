@@ -4,13 +4,18 @@
 # network_mode: host in Docker) and reaches services via 127.0.0.1:<port>.
 # Replace nocturne.bfreire.com with your real subdomain.
 #
-# The Nocturne stack publishes its API on 127.0.0.1:${NOCTURNE_HOST_PORT}
-# (default 8731), bound to loopback only — not reachable from outside the
-# host, so Caddy is the only ingress.
+# The Nocturne stack publishes:
+#   127.0.0.1:${NOCTURNE_WEB_HOST_PORT}  → SvelteKit frontend (default 8731)
+#   127.0.0.1:${NOCTURNE_API_HOST_PORT}  → REST API (default 8732, OFF by default —
+#                                          only enabled if you uncomment the
+#                                          ports block on nocturne-api in compose)
+# Both bound to loopback only — Caddy is the only public ingress.
 
+# ── Main UI ────────────────────────────────────────────────────────────────
 nocturne.bfreire.com {
     reverse_proxy 127.0.0.1:8731 {
-        # Nocturne reads X-Forwarded-* (ASPNETCORE_FORWARDEDHEADERS_ENABLED=true).
+        # ASPNETCORE_FORWARDEDHEADERS_ENABLED=true on the API; SvelteKit also
+        # honours X-Forwarded-* for cookie/url generation.
         header_up X-Forwarded-Proto {scheme}
         header_up X-Forwarded-Host  {host}
         header_up X-Real-IP         {remote_host}
@@ -18,3 +23,16 @@ nocturne.bfreire.com {
 
     encode zstd gzip
 }
+
+# ── (optional) Direct API access for Nightscout-compatible uploaders ────────
+# Uncomment AND uncomment the ports block on nocturne-api in docker-compose.yml.
+# Useful for AndroidAPS, xDrip+, or any CGM uploader that POSTs to /api/v1/entries.
+#
+# api.nocturne.bfreire.com {
+#     reverse_proxy 127.0.0.1:8732 {
+#         header_up X-Forwarded-Proto {scheme}
+#         header_up X-Forwarded-Host  {host}
+#         header_up X-Real-IP         {remote_host}
+#     }
+#     encode zstd gzip
+# }

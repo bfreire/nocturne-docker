@@ -2,13 +2,18 @@
 #
 # Source upstream:  https://github.com/nightscout/nocturne (unchanged images)
 # Template based on: src/Web/packages/portal/.../docker-compose/+page.svelte (minimal)
+# Aspire orchestration: src/Aspire/Nocturne.Aspire.Host/Program.cs
 #
-# Differences vs. upstream template:
-#   - Host port exposed as 8731 (instead of 8443) and decoupled via two vars:
-#       NOCTURNE_HOST_PORT  — published on the Docker host (8731)
-#       NOCTURNE_API_PORT   — internal Kestrel HTTPS port (8443)
-#   - Init script lives in ./pg-init/ (mirrors upstream docs/postgres/container-init/)
-#   - Watchtower scoped to this stack's labels so it does not touch other containers
+# Services:
+#   nocturne-postgres-server  PostgreSQL 17.6 with the three-role init script baked in
+#   nocturne-api              .NET REST API (Nightscout-compatible) — listens on HTTP
+#   nocturne-web              SvelteKit frontend + bot framework — listens on HTTP
+#   nocturne-watchtower       Auto-updates the api and web containers (label-scoped)
+#
+# External access goes through Caddy, which reaches the web container at
+# 127.0.0.1:${NOCTURNE_WEB_HOST_PORT}. The web container talks to the API
+# over the Docker internal network — the API does NOT need external exposure
+# for the UI to work.
 #
 # Portainer:
 #   Stacks → Add stack → Repository → set the repo URL → Compose path: docker-compose.yml
@@ -57,21 +62,79 @@ services:
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
       # HTTP only inside the container. The upstream image has no TLS cert baked
       # in, so HTTPS_PORTS would fail with "No server certificate was specified".
-      # Terminate TLS at a reverse proxy (Traefik / Caddy / nginx) in front.
+      # TLS is terminated by Caddy in front of nocturne-web.
       HTTP_PORTS: "${NOCTURNE_API_PORT}"
       ConnectionStrings__nocturne-postgres: "Host=nocturne-postgres-server;Port=5432;Username=nocturne_app;Password=${NOCTURNE_APP_PASSWORD};Database=nocturne"
       ConnectionStrings__nocturne-postgres-migrator: "Host=nocturne-postgres-server;Port=5432;Username=nocturne_migrator;Password=${NOCTURNE_MIGRATOR_PASSWORD};Database=nocturne"
       INSTANCE_KEY: "${INSTANCE_KEY}"
       DemoService__Enabled: "false"
-    # Published on the host's loopback only — Caddy (running on the host
-    # network) reaches the API at 127.0.0.1:${NOCTURNE_HOST_PORT}. Binding to
-    # 127.0.0.1 (not 0.0.0.0) means the port is NOT reachable from outside
-    # the host, so Caddy is the only ingress.
-    ports:
-      - "127.0.0.1:${NOCTURNE_HOST_PORT}:${NOCTURNE_API_PORT}"
+      # Used by the API to dispatch chat-bot alerts to the web container.
+      WEB_URL: "http://nocturne-web:${NOCTURNE_WEB_PORT}"
+    # No host port published for the API by default — the UI uses Docker DNS
+    # to reach it (nocturne-api:${NOCTURNE_API_PORT}). Uncomment if you need
+    # Nightscout-compatible clients (uploaders, AndroidAPS, etc.) to talk to
+    # the API directly from the internet — then add a Caddy block for it.
+    # ports:
+    #   - "127.0.0.1:${NOCTURNE_API_HOST_PORT}:${NOCTURNE_API_PORT}"
+    expose:
+      - "${NOCTURNE_API_PORT}"
     depends_on:
       nocturne-postgres-server:
         condition: "service_healthy"
+    networks:
+      - "nocturne"
+    restart: "unless-stopped"
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+
+  nocturne-web:
+    image: "${NOCTURNE_WEB_IMAGE}"
+    container_name: "nocturne-web"
+    environment:
+      # SvelteKit listens on this port (overrides the Dockerfile default of 5173).
+      PORT: "${NOCTURNE_WEB_PORT}"
+      # API URL used SERVER-SIDE by hooks.server.ts and api-client-factory.ts
+      # to call the .NET API over the Docker network. The browser never hits
+      # this hostname directly — SvelteKit proxies via remote functions/SSR.
+      NOCTURNE_API_URL: "http://nocturne-api:${NOCTURNE_API_PORT}"
+      PUBLIC_API_URL:   "http://nocturne-api:${NOCTURNE_API_PORT}"
+      # Public domain used to build OAuth redirect URLs (Discord, Telegram, …).
+      PUBLIC_BASE_DOMAIN: "${PUBLIC_BASE_DOMAIN}"
+      # Shared secret with the API for signing JWTs / OAuth state.
+      INSTANCE_KEY: "${INSTANCE_KEY}"
+      # chat_state_* tables owned by nocturne_web (bot framework state).
+      NOCTURNE_POSTGRES_URI: "postgresql://nocturne_web:${NOCTURNE_WEB_PASSWORD}@nocturne-postgres-server:5432/nocturne"
+      # Cookie names (kept at upstream defaults; documented here so they're
+      # obvious to anyone reading the compose).
+      COOKIE_ACCESS_TOKEN_NAME:  ".Nocturne.AccessToken"
+      COOKIE_REFRESH_TOKEN_NAME: ".Nocturne.RefreshToken"
+      # SvelteKit UI defaults.
+      PUBLIC_DEFAULT_LANGUAGE: "en"
+      # WebSocket / SignalR client tuning (defaults from upstream Dockerfile.web).
+      PUBLIC_WEBSOCKET_RECONNECT_ATTEMPTS:   "5"
+      PUBLIC_WEBSOCKET_RECONNECT_DELAY:      "1000"
+      PUBLIC_WEBSOCKET_MAX_RECONNECT_DELAY:  "30000"
+      PUBLIC_WEBSOCKET_PING_TIMEOUT:         "15000"
+      PUBLIC_WEBSOCKET_PING_INTERVAL:        "20000"
+      # Optional chat-bot credentials. Leave blank to disable a platform.
+      DISCORD_BOT_TOKEN:             "${DISCORD_BOT_TOKEN:-}"
+      DISCORD_PUBLIC_KEY:            "${DISCORD_PUBLIC_KEY:-}"
+      DISCORD_APPLICATION_ID:        "${DISCORD_APPLICATION_ID:-}"
+      DISCORD_CLIENT_SECRET:         "${DISCORD_CLIENT_SECRET:-}"
+      TELEGRAM_BOT_TOKEN:            "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_WEBHOOK_SECRET_TOKEN: "${TELEGRAM_WEBHOOK_SECRET_TOKEN:-}"
+      SLACK_BOT_TOKEN:               "${SLACK_BOT_TOKEN:-}"
+      SLACK_SIGNING_SECRET:          "${SLACK_SIGNING_SECRET:-}"
+      WHATSAPP_ACCESS_TOKEN:         "${WHATSAPP_ACCESS_TOKEN:-}"
+      WHATSAPP_VERIFY_TOKEN:         "${WHATSAPP_VERIFY_TOKEN:-}"
+      WHATSAPP_APP_SECRET:           "${WHATSAPP_APP_SECRET:-}"
+      WHATSAPP_PHONE_NUMBER_ID:      "${WHATSAPP_PHONE_NUMBER_ID:-}"
+    # Published on the host's loopback only — Caddy proxies to here.
+    ports:
+      - "127.0.0.1:${NOCTURNE_WEB_HOST_PORT}:${NOCTURNE_WEB_PORT}"
+    depends_on:
+      nocturne-api:
+        condition: "service_started"
     networks:
       - "nocturne"
     restart: "unless-stopped"

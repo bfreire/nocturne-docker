@@ -2,22 +2,59 @@
 
 Stack Docker pronta a puxar pelo **Portainer** para correr o [Nocturne](https://github.com/nightscout/nocturne) — a reescrita em .NET 10 da API do Nightscout — usando as imagens oficiais publicadas no GHCR pela CI do projecto upstream. Nenhum código do Nocturne é alterado: só wrap.
 
-> Imagens consumidas: `ghcr.io/nightscout/nocturne/nocturne-api`. Base de dados: PostgreSQL 17.6 com os três roles oficiais (`nocturne_migrator`, `nocturne_app`, `nocturne_web`) provisionados pelo script `pg-init/00-init.sh` (cópia *byte-a-byte* de [`docs/postgres/container-init/00-init.sh`](https://github.com/nightscout/nocturne/blob/main/docs/postgres/container-init/00-init.sh)).
+> Imagens consumidas: `ghcr.io/nightscout/nocturne/nocturne-api` e `ghcr.io/nightscout/nocturne/nocturne-web`. Base de dados: PostgreSQL 17.6 com os três roles oficiais (`nocturne_migrator`, `nocturne_app`, `nocturne_web`) provisionados pelo script `postgres/00-init.sh` (cópia *byte-a-byte* de [`docs/postgres/container-init/00-init.sh`](https://github.com/nightscout/nocturne/blob/main/docs/postgres/container-init/00-init.sh)).
 
 ## Conteúdo do repo
 
 | Ficheiro | O que faz |
 | --- | --- |
-| `docker-compose.yml` | Stack: `postgres` + `nocturne-api` + `watchtower` (com label scope). |
+| `docker-compose.yml` | Stack: `postgres` + `nocturne-api` + `nocturne-web` + `watchtower`. |
 | `.env.example` | Template das variáveis. Copia para `.env` e preenche. |
 | `postgres/Dockerfile` + `postgres/00-init.sh` | Imagem custom do Postgres com o script dos três roles já dentro (`/docker-entrypoint-initdb.d/`). Construída em build-time pelo Portainer — evita o bind-mount que dá `mkdir /data: read-only file system`. |
+| `Caddyfile.example` | Bloco pronto a colar no Caddyfile (loopback pattern). |
 | `.gitignore` | Garante que `.env` nunca vai para o repo. |
+
+## Arquitectura
+
+```
+                      ┌──────────────┐
+   browser ──HTTPS──▶ │    Caddy     │   (host network, termina TLS)
+                      └──────┬───────┘
+                             │ http://127.0.0.1:8731
+                             ▼
+                      ┌──────────────────────┐
+                      │  nocturne-web (1612) │   SvelteKit UI + bot framework
+                      └──────┬───────────────┘
+                             │ http://nocturne-api:8080  (Docker DNS)
+                             ▼
+                      ┌──────────────────────┐
+                      │  nocturne-api (8080) │   .NET REST API (Nightscout-compat)
+                      └──────┬───────────────┘
+                             │ Host=nocturne-postgres-server (Docker DNS)
+                             ▼
+                      ┌─────────────────────────────────┐
+                      │ nocturne-postgres-server (5432) │   3 roles: migrator/app/web
+                      └─────────────────────────────────┘
+```
+
+A API **não** está exposta no host por defeito — o browser nunca chama directamente. Quem chama é o web (server-side via `NOCTURNE_API_URL`). Se quiseres expor a API diretamente para uploaders Nightscout (AndroidAPS, xDrip+), descomenta o bloco `ports:` do `nocturne-api` no `docker-compose.yml` e o segundo bloco do `Caddyfile.example`.
 
 ## Rede e acesso externo
 
-A stack publica o API em **`127.0.0.1:8731`** (loopback do host, não 0.0.0.0). Caddy entra por aí.
+A stack publica o **web** em **`127.0.0.1:8731`** (loopback, não 0.0.0.0). Caddy entra por aí.
 
-> Kestrel está em HTTP, não HTTPS. A imagem oficial do Nocturne não traz certificado TLS, e `HTTPS_PORTS` rebenta logo no arranque com *"No server certificate was specified"*. A TLS é terminada pela Caddy.
+> Kestrel (API) está em HTTP, não HTTPS. A imagem oficial não traz certificado TLS, e `HTTPS_PORTS` rebenta logo no arranque com *"No server certificate was specified"*. A TLS é terminada pela Caddy.
+
+## Serviços (containers)
+
+| Serviço | Imagem | Porta interna | Exposto no host? |
+| --- | --- | --- | --- |
+| `nocturne-postgres-server` | `nocturne-postgres:local` (build local de `postgres:17.6` + init script) | 5432 | não |
+| `nocturne-api` | `ghcr.io/nightscout/nocturne/nocturne-api:0.0.4` | 8080 (HTTP) | não (opcional via `NOCTURNE_API_HOST_PORT`) |
+| `nocturne-web` | `ghcr.io/nightscout/nocturne/nocturne-web:0.0.4` | 1612 | `127.0.0.1:8731` |
+| `nocturne-watchtower` | `ghcr.io/nicholas-fedor/watchtower:latest` | — | não |
+
+**Connectors** (Dexcom, LibreLinkUp, Glooko, Tidepool, Nightscout, MyFitnessPal, MiniMed CareLink, MyLife, Home Assistant): são *bibliotecas .NET* que correm dentro do próprio `nocturne-api` — não containers separados. Para activar um connector, define as suas env vars no `nocturne-api` (ver `docs/configuration` no upstream).
 
 ## Como subir no Portainer (Stack from Git)
 
@@ -84,7 +121,7 @@ Deves ver `HTTP/2 200` (ou 401 se o endpoint exigir auth — também conta como 
 
 ## Updates automáticos
 
-Watchtower está incluído, mas com `WATCHTOWER_LABEL_ENABLE=true` — só toca em containers com o label `com.centurylinklabs.watchtower.enable=true`. Por defeito só o `nocturne-api` tem o label, logo Postgres e o próprio Watchtower ficam estáveis. Polling: 24h.
+Watchtower está incluído, mas com `WATCHTOWER_LABEL_ENABLE=true` — só toca em containers com o label `com.centurylinklabs.watchtower.enable=true`. Por defeito `nocturne-api` e `nocturne-web` têm o label, Postgres e o próprio Watchtower ficam estáveis. Polling: 24h.
 
 Para fazer update manual:
 
