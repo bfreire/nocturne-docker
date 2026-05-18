@@ -16,7 +16,14 @@
 
 services:
   nocturne-postgres-server:
-    image: "docker.io/library/postgres:17.6"
+    # Custom image that bakes in the three-role init script via build context.
+    # Avoids the Portainer "Stack from Git" bind-mount trap where ./pg-init
+    # resolves to /data/compose/<id>/ inside the Portainer container but not
+    # on the Docker host, causing "mkdir /data: read-only file system".
+    build:
+      context: "./postgres"
+      dockerfile: "Dockerfile"
+    image: "nocturne-postgres:local"
     container_name: "nocturne-postgres"
     environment:
       POSTGRES_DB: "nocturne"
@@ -33,10 +40,6 @@ services:
       - type: "volume"
         source: "nocturne-postgres-data"
         target: "/var/lib/postgresql/data"
-      - type: "bind"
-        source: "./pg-init"
-        target: "/docker-entrypoint-initdb.d"
-        read_only: true
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USERNAME} -d nocturne"]
       interval: 10s

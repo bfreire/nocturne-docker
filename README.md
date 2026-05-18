@@ -10,7 +10,7 @@ Stack Docker pronta a puxar pelo **Portainer** para correr o [Nocturne](https://
 | --- | --- |
 | `docker-compose.yml` | Stack: `postgres` + `nocturne-api` + `watchtower` (com label scope). |
 | `.env.example` | Template das variáveis. Copia para `.env` e preenche. |
-| `pg-init/00-init.sh` | Cria os três roles PostgreSQL na primeira arranque do container Postgres. |
+| `postgres/Dockerfile` + `postgres/00-init.sh` | Imagem custom do Postgres com o script dos três roles já dentro (`/docker-entrypoint-initdb.d/`). Construída em build-time pelo Portainer — evita o bind-mount que dá `mkdir /data: read-only file system`. |
 | `.gitignore` | Garante que `.env` nunca vai para o repo. |
 
 ## Porta exposta
@@ -29,7 +29,7 @@ A stack publica a API em **`https://<host>:8731`** no host (mapeada para `8443/H
 
 Notas:
 
-- O `pg-init/00-init.sh` é montado via *bind mount relativo* (`./pg-init`). Quando o Portainer faz git pull, o ficheiro vai junto e o mount funciona — desde que o agent Portainer corra no mesmo host onde o repo é clonado (default).
+- O `postgres/00-init.sh` é incluído numa imagem custom construída em build-time (`build: ./postgres`). Isto contorna o bug típico do Portainer com Stacks from Git, em que bind mounts relativos resolvem para `/data/compose/<id>/...` dentro do container do Portainer mas não existem no host onde corre o daemon do Docker (erro `mkdir /data: read-only file system`).
 - Na primeira arranque, o Postgres só executa o init script se o volume `nocturne-postgres-data` estiver vazio. Se mudares as passwords depois, tens de fazer `docker compose down -v` (apaga dados!) ou aplicá-las manualmente via `ALTER ROLE`.
 
 ## Gerar segredos rapidamente
