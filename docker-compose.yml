@@ -1,14 +1,22 @@
-# Nocturne — production stack (Portainer-ready)
+# Nocturne — production stack (Portainer-ready, built from source)
 #
-# Source upstream:  https://github.com/nightscout/nocturne (unchanged images)
+# Source upstream:  https://github.com/nightscout/nocturne
 # Template based on: src/Web/packages/portal/.../docker-compose/+page.svelte (minimal)
 # Aspire orchestration: src/Aspire/Nocturne.Aspire.Host/Program.cs
 #
 # Services:
 #   nocturne-postgres-server  PostgreSQL 17.6 with the three-role init script baked in
-#   nocturne-api              .NET REST API (Nightscout-compatible) — listens on HTTP
-#   nocturne-web              SvelteKit frontend + bot framework — listens on HTTP
-#   nocturne-watchtower       Auto-updates the api and web containers (label-scoped)
+#   nocturne-api              .NET REST API (Nightscout-compatible) — built from source
+#   nocturne-web              SvelteKit frontend + bot framework — built from source
+#   nocturne-watchtower       Watches for image updates (registry-based only)
+#
+# Build strategy:
+#   nocturne-api  — api/Dockerfile (in this repo) clones nightscout/nocturne and
+#                   runs dotnet publish; no Dockerfile exists in the upstream.
+#   nocturne-web  — Dockerfile.web from the upstream repo, used directly as a
+#                   remote Git build context (Docker clones the upstream at build time).
+#   nocturne-postgres-server — postgres/Dockerfile (in this repo) bakes in the
+#                   three-role init script to avoid Portainer bind-mount issues.
 #
 # External access goes through Caddy, which reaches the web container at
 # 127.0.0.1:${NOCTURNE_WEB_HOST_PORT}. The web container talks to the API
@@ -56,13 +64,16 @@ services:
     restart: "unless-stopped"
 
   nocturne-api:
-    image: "${NOCTURNE_API_IMAGE}"
+    # Built from source: api/Dockerfile clones nightscout/nocturne and runs
+    # "dotnet publish". The upstream has no Dockerfile for the API.
+    build:
+      context: "."
+      dockerfile: "api/Dockerfile"
+    image: "nocturne-api:local"
     container_name: "nocturne-api"
     environment:
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
-      # HTTP only inside the container. The upstream image has no TLS cert baked
-      # in, so HTTPS_PORTS would fail with "No server certificate was specified".
-      # TLS is terminated by Caddy in front of nocturne-web.
+      # HTTP only inside the container — TLS is terminated by Caddy.
       HTTP_PORTS: "${NOCTURNE_API_PORT}"
       ConnectionStrings__nocturne-postgres: "Host=nocturne-postgres-server;Port=5432;Username=nocturne_app;Password=${NOCTURNE_APP_PASSWORD};Database=nocturne"
       ConnectionStrings__nocturne-postgres-migrator: "Host=nocturne-postgres-server;Port=5432;Username=nocturne_migrator;Password=${NOCTURNE_MIGRATOR_PASSWORD};Database=nocturne"
@@ -84,11 +95,14 @@ services:
     networks:
       - "nocturne"
     restart: "unless-stopped"
-    labels:
-      com.centurylinklabs.watchtower.enable: "true"
 
   nocturne-web:
-    image: "${NOCTURNE_WEB_IMAGE}"
+    # Built from source: upstream Dockerfile.web used as a remote Git build context.
+    # Docker clones nightscout/nocturne at build time — no local copy needed.
+    build:
+      context: "https://github.com/nightscout/nocturne.git#main"
+      dockerfile: "Dockerfile.web"
+    image: "nocturne-web:local"
     container_name: "nocturne-web"
     environment:
       # SvelteKit listens on this port (overrides the Dockerfile default of 5173).
@@ -138,8 +152,6 @@ services:
     networks:
       - "nocturne"
     restart: "unless-stopped"
-    labels:
-      com.centurylinklabs.watchtower.enable: "true"
 
   watchtower:
     image: "ghcr.io/nicholas-fedor/watchtower:latest"

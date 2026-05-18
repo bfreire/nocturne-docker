@@ -1,8 +1,8 @@
 # nocturne-docker
 
-Stack Docker pronta a puxar pelo **Portainer** para correr o [Nocturne](https://github.com/nightscout/nocturne) — a reescrita em .NET 10 da API do Nightscout — usando as imagens oficiais publicadas no GHCR pela CI do projecto upstream. Nenhum código do Nocturne é alterado: só wrap.
+Stack Docker pronta a puxar pelo **Portainer** para correr o [Nocturne](https://github.com/nightscout/nocturne) — a reescrita em .NET 10 da API do Nightscout — **compilada a partir do código-fonte** do upstream. Nenhum código do Nocturne é alterado: só wrap + Dockerfiles de build.
 
-> Imagens consumidas: `ghcr.io/nightscout/nocturne/nocturne-api` e `ghcr.io/nightscout/nocturne/nocturne-web`. Base de dados: PostgreSQL 17.6 com os três roles oficiais (`nocturne_migrator`, `nocturne_app`, `nocturne_web`) provisionados pelo script `postgres/00-init.sh` (cópia *byte-a-byte* de [`docs/postgres/container-init/00-init.sh`](https://github.com/nightscout/nocturne/blob/main/docs/postgres/container-init/00-init.sh)).
+> **Build strategy:** `nocturne-api` é compilado por `api/Dockerfile` (neste repo) via `dotnet publish` — o upstream não tem Dockerfile para a API. `nocturne-web` usa o `Dockerfile.web` do upstream directamente como contexto Git remoto. Base de dados: PostgreSQL 17.6 com os três roles oficiais (`nocturne_migrator`, `nocturne_app`, `nocturne_web`) provisionados pelo script `postgres/00-init.sh` (cópia *byte-a-byte* de [`docs/postgres/container-init/00-init.sh`](https://github.com/nightscout/nocturne/blob/main/docs/postgres/container-init/00-init.sh)).
 
 ## Conteúdo do repo
 
@@ -10,6 +10,7 @@ Stack Docker pronta a puxar pelo **Portainer** para correr o [Nocturne](https://
 | --- | --- |
 | `docker-compose.yml` | Stack: `postgres` + `nocturne-api` + `nocturne-web` + `watchtower`. |
 | `.env.example` | Template das variáveis. Copia para `.env` e preenche. |
+| `api/Dockerfile` | Build da API .NET 10 a partir do upstream (git clone + dotnet publish). O upstream não tem Dockerfile para a API — usa `dotnet publish --container` em CI. |
 | `postgres/Dockerfile` + `postgres/00-init.sh` | Imagem custom do Postgres com o script dos três roles já dentro (`/docker-entrypoint-initdb.d/`). Construída em build-time pelo Portainer — evita o bind-mount que dá `mkdir /data: read-only file system`. |
 | `Caddyfile.example` | Bloco pronto a colar no Caddyfile (loopback pattern). |
 | `.gitignore` | Garante que `.env` nunca vai para o repo. |
@@ -49,9 +50,9 @@ A stack publica o **web** em **`127.0.0.1:8731`** (loopback, não 0.0.0.0). Cadd
 
 | Serviço | Imagem | Porta interna | Exposto no host? |
 | --- | --- | --- | --- |
-| `nocturne-postgres-server` | `nocturne-postgres:local` (build local de `postgres:17.6` + init script) | 5432 | não |
-| `nocturne-api` | `ghcr.io/nightscout/nocturne/nocturne-api:0.0.4` | 8080 (HTTP) | não (opcional via `NOCTURNE_API_HOST_PORT`) |
-| `nocturne-web` | `ghcr.io/nightscout/nocturne/nocturne-web:0.0.4` | 1612 | `127.0.0.1:8731` |
+| `nocturne-postgres-server` | `nocturne-postgres:local` (build de `postgres:17.6` + init script) | 5432 | não |
+| `nocturne-api` | `nocturne-api:local` (built from source via `api/Dockerfile`) | 8080 (HTTP) | não (opcional via `NOCTURNE_API_HOST_PORT`) |
+| `nocturne-web` | `nocturne-web:local` (built from source via upstream `Dockerfile.web`) | 1612 | `127.0.0.1:8731` |
 | `nocturne-watchtower` | `ghcr.io/nicholas-fedor/watchtower:latest` | — | não |
 
 **Connectors** (Dexcom, LibreLinkUp, Glooko, Tidepool, Nightscout, MyFitnessPal, MiniMed CareLink, MyLife, Home Assistant): são *bibliotecas .NET* que correm dentro do próprio `nocturne-api` — não containers separados. Para activar um connector, define as suas env vars no `nocturne-api` (ver `docs/configuration` no upstream).
