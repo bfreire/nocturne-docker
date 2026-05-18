@@ -78,6 +78,9 @@ services:
       ConnectionStrings__nocturne-postgres: "Host=nocturne-postgres-server;Port=5432;Username=nocturne_app;Password=${NOCTURNE_APP_PASSWORD};Database=nocturne"
       ConnectionStrings__nocturne-postgres-migrator: "Host=nocturne-postgres-server;Port=5432;Username=nocturne_migrator;Password=${NOCTURNE_MIGRATOR_PASSWORD};Database=nocturne"
       INSTANCE_KEY: "${INSTANCE_KEY}"
+      # Used by the API for tenant routing and WebAuthn RP ID resolution.
+      # Must match the public domain (without protocol, without port).
+      BASE_DOMAIN: "${PUBLIC_BASE_DOMAIN}"
       DemoService__Enabled: "false"
       # Used by the API to dispatch chat-bot alerts to the web container.
       WEB_URL: "http://nocturne-web:${NOCTURNE_WEB_PORT}"
