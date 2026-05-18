@@ -1,0 +1,13 @@
+# Real secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local Docker volumes if you ever bind-mount instead of named volumes
+pg-data/

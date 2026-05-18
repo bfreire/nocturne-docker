@@ -1,0 +1,91 @@
+# Nocturne — production stack (Portainer-ready)
+#
+# Source upstream:  https://github.com/nightscout/nocturne (unchanged images)
+# Template based on: src/Web/packages/portal/.../docker-compose/+page.svelte (minimal)
+#
+# Differences vs. upstream template:
+#   - Host port exposed as 8731 (instead of 8443) and decoupled via two vars:
+#       NOCTURNE_HOST_PORT  — published on the Docker host (8731)
+#       NOCTURNE_API_PORT   — internal Kestrel HTTPS port (8443)
+#   - Init script lives in ./pg-init/ (mirrors upstream docs/postgres/container-init/)
+#   - Watchtower scoped to this stack's labels so it does not touch other containers
+#
+# Portainer:
+#   Stacks → Add stack → Repository → set the repo URL → Compose path: docker-compose.yml
+#   Environment variables: paste/edit the values from .env.example.
+
+services:
+  nocturne-postgres-server:
+    image: "docker.io/library/postgres:17.6"
+    container_name: "nocturne-postgres"
+    environment:
+      POSTGRES_DB: "nocturne"
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+      POSTGRES_USER: "${POSTGRES_USERNAME}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      NOCTURNE_MIGRATOR_PASSWORD: "${NOCTURNE_MIGRATOR_PASSWORD}"
+      NOCTURNE_APP_PASSWORD: "${NOCTURNE_APP_PASSWORD}"
+      NOCTURNE_WEB_PASSWORD: "${NOCTURNE_WEB_PASSWORD}"
+    expose:
+      - "5432"
+    volumes:
+      - type: "volume"
+        source: "nocturne-postgres-data"
+        target: "/var/lib/postgresql/data"
+      - type: "bind"
+        source: "./pg-init"
+        target: "/docker-entrypoint-initdb.d"
+        read_only: true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USERNAME} -d nocturne"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - "nocturne"
+    restart: "unless-stopped"
+
+  nocturne-api:
+    image: "${NOCTURNE_API_IMAGE}"
+    container_name: "nocturne-api"
+    environment:
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      HTTPS_PORTS: "${NOCTURNE_API_PORT}"
+      ConnectionStrings__nocturne-postgres: "Host=nocturne-postgres-server;Port=5432;Username=nocturne_app;Password=${NOCTURNE_APP_PASSWORD};Database=nocturne"
+      ConnectionStrings__nocturne-postgres-migrator: "Host=nocturne-postgres-server;Port=5432;Username=nocturne_migrator;Password=${NOCTURNE_MIGRATOR_PASSWORD};Database=nocturne"
+      INSTANCE_KEY: "${INSTANCE_KEY}"
+      DemoService__Enabled: "false"
+    ports:
+      # host : container — exposes Nocturne externally on the user-chosen port (8731)
+      - "${NOCTURNE_HOST_PORT}:${NOCTURNE_API_PORT}"
+    depends_on:
+      nocturne-postgres-server:
+        condition: "service_healthy"
+    networks:
+      - "nocturne"
+    restart: "unless-stopped"
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+
+  watchtower:
+    image: "ghcr.io/nicholas-fedor/watchtower:latest"
+    container_name: "nocturne-watchtower"
+    environment:
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_LABEL_ENABLE: "true"          # only update containers with the label above
+      WATCHTOWER_POLL_INTERVAL: "86400"         # 24h
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+      - "nocturne"
+    restart: "unless-stopped"
+
+networks:
+  nocturne:
+    driver: "bridge"
+
+volumes:
+  nocturne-postgres-data:
+    driver: "local"
