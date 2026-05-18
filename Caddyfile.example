@@ -1,0 +1,42 @@
+# Caddyfile snippet for fronting Nocturne with Caddy.
+#
+# Pre-requisites:
+#   1. The Nocturne stack created the `nocturne-net` Docker network.
+#   2. The Caddy container is attached to that same network (see below).
+#   3. The subdomain you pick has a DNS A/AAAA record pointing at this host
+#      AND port 80 + 443 are reachable from the public internet (so Caddy
+#      can solve the ACME HTTP-01 challenge).
+#
+# Replace nocturne.example.com with your real subdomain.
+
+nocturne.example.com {
+    # Caddy resolves `nocturne-api` via Docker DNS because it's on nocturne-net.
+    # NOCTURNE_API_PORT defaults to 8080 in the Nocturne stack.
+    reverse_proxy nocturne-api:8080 {
+        # Nocturne uses ASPNETCORE_FORWARDEDHEADERS_ENABLED=true and reads
+        # X-Forwarded-* to know it's behind a proxy. Caddy sets these by
+        # default, but make it explicit so anyone reading the config knows.
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host  {host}
+        header_up X-Real-IP         {remote_host}
+    }
+
+    # SignalR / WebSocket support (the API uses /hubs/data for live glucose
+    # updates). Caddy v2 handles WS transparently on reverse_proxy, no
+    # extra config needed — kept here for visibility.
+    # @ws {
+    #     header Connection *Upgrade*
+    #     header Upgrade    websocket
+    # }
+    # reverse_proxy @ws nocturne-api:8080
+
+    encode zstd gzip
+
+    log {
+        output file /var/log/caddy/nocturne.log {
+            roll_size 10MiB
+            roll_keep 5
+        }
+        format json
+    }
+}

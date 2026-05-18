@@ -55,14 +55,22 @@ services:
     container_name: "nocturne-api"
     environment:
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
-      HTTPS_PORTS: "${NOCTURNE_API_PORT}"
+      # HTTP only inside the container. The upstream image has no TLS cert baked
+      # in, so HTTPS_PORTS would fail with "No server certificate was specified".
+      # Terminate TLS at a reverse proxy (Traefik / Caddy / nginx) in front.
+      HTTP_PORTS: "${NOCTURNE_API_PORT}"
       ConnectionStrings__nocturne-postgres: "Host=nocturne-postgres-server;Port=5432;Username=nocturne_app;Password=${NOCTURNE_APP_PASSWORD};Database=nocturne"
       ConnectionStrings__nocturne-postgres-migrator: "Host=nocturne-postgres-server;Port=5432;Username=nocturne_migrator;Password=${NOCTURNE_MIGRATOR_PASSWORD};Database=nocturne"
       INSTANCE_KEY: "${INSTANCE_KEY}"
       DemoService__Enabled: "false"
-    ports:
-      # host : container — exposes Nocturne externally on the user-chosen port (8731)
-      - "${NOCTURNE_HOST_PORT}:${NOCTURNE_API_PORT}"
+    # No host port published — external access goes through Caddy, which is
+    # attached to the `nocturne-net` network below and reverse-proxies to
+    # `nocturne-api:${NOCTURNE_API_PORT}`. If you need direct host access for
+    # debugging, uncomment the ports block below.
+    # ports:
+    #   - "127.0.0.1:${NOCTURNE_HOST_PORT}:${NOCTURNE_API_PORT}"
+    expose:
+      - "${NOCTURNE_API_PORT}"
     depends_on:
       nocturne-postgres-server:
         condition: "service_healthy"
@@ -87,6 +95,12 @@ services:
 
 networks:
   nocturne:
+    # Named explicitly so external stacks (Caddy) can attach to the SAME
+    # network without ambiguity. Caddy's compose declares:
+    #   networks:
+    #     nocturne-net:
+    #       external: true
+    name: "nocturne-net"
     driver: "bridge"
 
 volumes:
