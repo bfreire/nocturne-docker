@@ -15,9 +15,7 @@ Stack Docker pronta a puxar pelo **Portainer** para correr o [Nocturne](https://
 
 ## Rede e acesso externo
 
-A stack NÃO publica nenhuma porta no host por defeito — o acesso externo passa por um reverse proxy (Caddy) que se liga à mesma rede Docker. Ver secção "Configuração da Caddy" abaixo.
-
-Se quiseres fazer debug local sem Caddy, descomenta o bloco `ports:` no `docker-compose.yml` (já lá deixei o snippet) e acede em `http://127.0.0.1:8731`.
+A stack publica o API em **`127.0.0.1:8731`** (loopback do host, não 0.0.0.0). Caddy entra por aí.
 
 > Kestrel está em HTTP, não HTTPS. A imagem oficial do Nocturne não traz certificado TLS, e `HTTPS_PORTS` rebenta logo no arranque com *"No server certificate was specified"*. A TLS é terminada pela Caddy.
 
@@ -50,57 +48,36 @@ Mínimo de quatro execuções:
 | `NOCTURNE_WEB_PASSWORD` | Role do framework de bots (tabelas `chat_state_*`). |
 | `INSTANCE_KEY` | Assina JWTs e cookies do Nocturne. |
 
-## Configuração da Caddy
+## Configuração da Caddy (padrão loopback)
 
-A stack do Nocturne cria uma rede Docker chamada **`nocturne-net`**. Para a Caddy chegar ao API basta entrar nessa rede.
+Este repo assume que a Caddy corre no namespace de rede do host (`network_mode: host` em Docker, ou Caddy nativa) e proxia para `127.0.0.1:<porta>` — o mesmo padrão dos outros sites no Caddyfile.
 
-### 1. Liga a Caddy à rede `nocturne-net`
+### 1. Adiciona o bloco ao Caddyfile
 
-No `docker-compose.yml` da tua stack da Caddy, adiciona:
-
-```yaml
-services:
-  caddy:
-    # ... a tua config existente ...
-    networks:
-      - default          # mantém a rede original da Caddy
-      - nocturne-net     # liga à rede do Nocturne
-
-networks:
-  nocturne-net:
-    external: true       # rede gerida pela stack do Nocturne
-```
-
-Faz redeploy da stack da Caddy. A partir daqui a Caddy resolve `nocturne-api` via DNS interno do Docker.
-
-> **Ordem importa**: a stack do Nocturne tem de estar a correr ANTES de a stack da Caddy ser redeployed, senão a rede `nocturne-net` ainda não existe e o redeploy falha com `network nocturne-net declared as external, but could not be found`.
-
-### 2. Adiciona o bloco ao Caddyfile
-
-Vê o ficheiro [`Caddyfile.example`](./Caddyfile.example) no repo. Copia o bloco, substitui `nocturne.example.com` pelo teu subdomínio real, e cola no Caddyfile da tua stack.
-
-Exemplo mínimo:
+Substitui o subdomínio se necessário:
 
 ```caddy
-nocturne.example.com {
-    reverse_proxy nocturne-api:8080
+nocturne.bfreire.com {
+    reverse_proxy 127.0.0.1:8731
 }
 ```
 
+Versão mais completa (com headers e compressão) em [`Caddyfile.example`](./Caddyfile.example).
+
 A Caddy trata automaticamente do certificado Let's Encrypt — desde que o subdomínio resolva para o IP público da máquina e as portas 80/443 estejam acessíveis.
 
-### 3. Recarrega a Caddy
+### 2. Recarrega a Caddy
 
 ```bash
 docker exec <caddy-container> caddy reload --config /etc/caddy/Caddyfile
 ```
 
-ou simplesmente reinicia o container.
+ou reinicia o container.
 
-### 4. Testa
+### 3. Testa
 
 ```bash
-curl -I https://nocturne.example.com/api/v1/status
+curl -I https://nocturne.bfreire.com/api/v1/status
 ```
 
 Deves ver `HTTP/2 200` (ou 401 se o endpoint exigir auth — também conta como sinal de que o reverse proxy funciona).

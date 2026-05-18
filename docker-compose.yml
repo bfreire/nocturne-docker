@@ -63,14 +63,12 @@ services:
       ConnectionStrings__nocturne-postgres-migrator: "Host=nocturne-postgres-server;Port=5432;Username=nocturne_migrator;Password=${NOCTURNE_MIGRATOR_PASSWORD};Database=nocturne"
       INSTANCE_KEY: "${INSTANCE_KEY}"
       DemoService__Enabled: "false"
-    # No host port published — external access goes through Caddy, which is
-    # attached to the `nocturne-net` network below and reverse-proxies to
-    # `nocturne-api:${NOCTURNE_API_PORT}`. If you need direct host access for
-    # debugging, uncomment the ports block below.
-    # ports:
-    #   - "127.0.0.1:${NOCTURNE_HOST_PORT}:${NOCTURNE_API_PORT}"
-    expose:
-      - "${NOCTURNE_API_PORT}"
+    # Published on the host's loopback only — Caddy (running on the host
+    # network) reaches the API at 127.0.0.1:${NOCTURNE_HOST_PORT}. Binding to
+    # 127.0.0.1 (not 0.0.0.0) means the port is NOT reachable from outside
+    # the host, so Caddy is the only ingress.
+    ports:
+      - "127.0.0.1:${NOCTURNE_HOST_PORT}:${NOCTURNE_API_PORT}"
     depends_on:
       nocturne-postgres-server:
         condition: "service_healthy"
@@ -95,11 +93,6 @@ services:
 
 networks:
   nocturne:
-    # Named explicitly so external stacks (Caddy) can attach to the SAME
-    # network without ambiguity. Caddy's compose declares:
-    #   networks:
-    #     nocturne-net:
-    #       external: true
     name: "nocturne-net"
     driver: "bridge"
 
