@@ -96,7 +96,14 @@ services:
       nocturne-postgres-server:
         condition: "service_healthy"
     networks:
-      - "nocturne"
+      nocturne:
+        # Alias lets the web container call the API with Host: PUBLIC_BASE_DOMAIN,
+        # which is required for TenantResolutionMiddleware to resolve the correct
+        # tenant during server-side setup/auth calls. Without this, Host would be
+        # "nocturne-api" and the middleware falls back to the null tenant (00000000-…),
+        # causing setup to register the passkey in the wrong tenant context.
+        aliases:
+          - "${PUBLIC_BASE_DOMAIN}"
     restart: "unless-stopped"
 
   nocturne-web:
@@ -110,11 +117,12 @@ services:
     environment:
       # SvelteKit listens on this port (overrides the Dockerfile default of 5173).
       PORT: "${NOCTURNE_WEB_PORT}"
-      # API URL used SERVER-SIDE by hooks.server.ts and api-client-factory.ts
-      # to call the .NET API over the Docker network. The browser never hits
-      # this hostname directly — SvelteKit proxies via remote functions/SSR.
-      NOCTURNE_API_URL: "http://nocturne-api:${NOCTURNE_API_PORT}"
-      PUBLIC_API_URL:   "http://nocturne-api:${NOCTURNE_API_PORT}"
+      # API URL used SERVER-SIDE by hooks.server.ts and api-client-factory.ts.
+      # Uses PUBLIC_BASE_DOMAIN (resolved via Docker network alias on nocturne-api)
+      # so the Host header reaching the API is the public domain, not "nocturne-api".
+      # This is required for TenantResolutionMiddleware to find the correct tenant.
+      NOCTURNE_API_URL: "http://${PUBLIC_BASE_DOMAIN}:${NOCTURNE_API_PORT}"
+      PUBLIC_API_URL:   "http://${PUBLIC_BASE_DOMAIN}:${NOCTURNE_API_PORT}"
       # Public domain used to build OAuth redirect URLs (Discord, Telegram, …).
       PUBLIC_BASE_DOMAIN: "${PUBLIC_BASE_DOMAIN}"
       # Shared secret with the API for signing JWTs / OAuth state.
